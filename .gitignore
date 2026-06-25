@@ -1,0 +1,8 @@
+# Never commit board data or local config (kept in ~/.config/todo and the vault)
+*.jsonl
+config.json
+
+__pycache__/
+*.py[cod]
+.DS_Store
+*.log
