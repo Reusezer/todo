@@ -24,15 +24,20 @@ Run `todo` for the full-screen board:
 
 ```
   TODO · To-Do          12 cards
-  [1] Inbox   [2] This Week   [3] Today   [4] Doing   [5] Done
 
-  Inbox (3)
+  [1] Inbox  (3)
   › [ ] fix retrieval eval table
     [ ] 線形代数の教科書読む
-  ...
+  [2] This Week  (0)
+      —
+  [3] Today  (2)
+    ...
   j/k move · 1-5 send to lane · a add · x done · e edit
   / search · enter expand · g go-to · r reload · q quit
 ```
+
+Each lane shows its number, so pressing that number sends the selected card
+straight there.
 
 - **j / k** (or arrows) select a card
 - **1–9** send the selected card to that lane (numbers shown in the bar)

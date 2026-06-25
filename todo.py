@@ -376,15 +376,13 @@ def build_view(board, sel, query=""):
     total = sum(len(l.cards) for l in board.lanes)
     rows.append((f"  TODO · {board_path().stem}    {total} cards"
                  + (f'   /{query}' if query else ""), "title"))
-    bar = "   ".join(f"[{i+1}] {l.name}" for i, l in enumerate(board.lanes))
-    rows.append(("  " + bar, "bar"))
     rows.append(("", "sep"))
     flat = []
     for li, lane in enumerate(board.lanes):
         vis = [(ci, b) for ci, b in enumerate(lane.cards) if matches(query, b)]
         if query and not vis:
             continue
-        rows.append((f"  {lane.name} ({len(lane.cards)})", "lane"))
+        rows.append((f"  [{li+1}] {lane.name}  ({len(lane.cards)})", "lane"))
         for ci, b in vis:
             idx = len(flat)
             flat.append((li, ci))
@@ -604,8 +602,11 @@ def main():
     s = sub.add_parser("gc"); s.add_argument("--days", type=int); s.add_argument("--dry-run", action="store_true")
     s.set_defaults(fn=cmd_gc)
     s = sub.add_parser("path"); s.set_defaults(fn=cmd_path)
+    sub.add_parser("help")
 
     args = p.parse_args()
+    if args.cmd == "help":
+        p.print_help(); return
     if not args.cmd:
         maybe_gc()
         run_tui()
