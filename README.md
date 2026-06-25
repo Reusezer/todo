@@ -41,8 +41,12 @@ straight there.
 
 - **j / k** (or arrows) select a card
 - **1–9** send the selected card to that lane (numbers shown in the bar)
-- **a** add · **x** toggle done · **e** edit · **enter** expand · **/** search ·
-  **g** jump to a lane · **r** reload · **q** quit
+- **a** add · **x** complete (sends the card to **Done**; press again in Done to
+  reopen it) · **e** edit · **enter** expand · **/** search · **g** jump to a
+  lane · **r** reload · **q** quit
+
+Completion is the lane: a card in **Done** is checked `[x]`, a card anywhere else
+is `[ ]`, and moving a card in/out of Done flips it automatically.
 
 ### Scripting / agents
 
@@ -51,7 +55,7 @@ todo ls [--lane L] [--tag T] [--json]   # list (refreshes the JSONL mirror)
 todo search <query>
 todo add "buy milk" [--lane Inbox] [--tag "#me"]
 todo mv <id> <lane>       # id + lane index/name from `todo ls`
-todo done <id>            # toggle complete
+todo done <id>            # complete: move the card to Done (auto-checked)
 todo view [query]         # plain-text board dump
 todo gc [--days N] [--dry-run]   # expire old Done cards now
 todo sync                 # rebuild the JSONL mirror

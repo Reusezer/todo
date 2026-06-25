@@ -235,25 +235,16 @@ def op_move(lane_name, title, dest_idx):
     block = board.lanes[src].cards.pop(ci)
     while block and block[-1].strip() == "":          # drop trailing blank lines on move
         block.pop()
+    # the checkbox mirrors the lane: into Done -> [x], out of Done -> [ ]
+    done_name = load_config()["done_lane"].lower()
+    if board.lanes[dest_idx].name.lower() == done_name:
+        if block[0].startswith("- [ ] "):
+            block[0] = "- [x] " + block[0][6:]
+    elif DONE_RE.match(block[0]):
+        block[0] = "- [ ] " + block[0][6:]
     board.lanes[dest_idx].cards.append(block)
     write_board(serialize(board))
     return True
-
-
-def op_toggle(lane_name, title):
-    board = read_board()
-    for lane in board.lanes:
-        if lane.name != lane_name:
-            continue
-        for block in lane.cards:
-            if card_title(block) == title:
-                if block[0].startswith("- [ ] "):
-                    block[0] = "- [x] " + block[0][6:]
-                elif DONE_RE.match(block[0]):
-                    block[0] = "- [ ] " + block[0][6:]
-                write_board(serialize(board))
-                return True
-    return False
 
 
 def op_edit(lane_name, title, new_text):
@@ -413,6 +404,7 @@ def _tui(stdscr):
     stdscr.keypad(True)
     sel, query, msg = 0, "", ""
     board = read_board()
+    done_name = load_config()["done_lane"].lower()
 
     def prompt(label, prefill=""):
         curses.curs_set(1)
@@ -472,7 +464,14 @@ def _tui(stdscr):
                 op_move(ln, ti, dest); board = read_board()
                 msg = f"moved to {board.lanes[dest].name}"
         elif c == ord("x") and sel_card:
-            ln, ti = cur_title_lane(); op_toggle(ln, ti); board = read_board(); msg = "toggled"
+            li = sel_card[0]
+            ln, ti = cur_title_lane()
+            done_idx = next((i for i, l in enumerate(board.lanes)
+                             if l.name.lower() == done_name), len(board.lanes) - 1)
+            if li == done_idx:                       # already done -> reopen into the first lane
+                op_move(ln, ti, 0); board = read_board(); msg = "reopened → " + board.lanes[0].name
+            else:
+                op_move(ln, ti, done_idx); board = read_board(); msg = "done → " + board.lanes[done_idx].name
         elif c == ord("a"):
             li = sel_card[0] if sel_card else 0
             t = prompt(f"add to {board.lanes[li].name}: ")
@@ -559,8 +558,11 @@ def cmd_done(a):
     board = read_board()
     loc = find_card(board, a.id)
     if loc is None: sys.exit(f"no card with id {a.id}")
-    ln = board.lanes[loc[0]].name; ti = card_title(board.lanes[loc[0]].cards[loc[1]])
-    op_toggle(ln, ti); print(f"toggled {a.id}")
+    done_idx = find_lane(board, load_config()["done_lane"])
+    if done_idx is None: done_idx = len(board.lanes) - 1
+    ti = card_title(board.lanes[loc[0]].cards[loc[1]])
+    op_move(board.lanes[loc[0]].name, ti, done_idx)
+    print(f"done -> {board.lanes[done_idx].name}: {ti}")
 
 
 def cmd_view(a):
