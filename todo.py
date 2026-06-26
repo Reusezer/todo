@@ -352,6 +352,32 @@ def maybe_gc():
         pass                                                # never let gc break a command
 
 
+def reconcile():
+    """Ticking = done: move any [x] card that isn't in the Done lane into Done.
+
+    Keeps the two ways of checking a card consistent — the CLI's `x`/`done` and
+    a checkbox ticked directly in Obsidian both end up filed in Done.
+    """
+    cfg = load_config()
+    board = read_board()
+    done_idx = find_lane(board, cfg["done_lane"])
+    if done_idx is None:
+        return 0
+    strays = [(lane.name, card_title(b))
+              for li, lane in enumerate(board.lanes) if li != done_idx
+              for b in lane.cards if card_done(b)]
+    for lane_name, title in strays:
+        op_move(lane_name, title, done_idx)                 # re-reads + writes each move
+    return len(strays)
+
+
+def maybe_reconcile():
+    try:
+        reconcile()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Rendering — pure function (text rows tagged by kind), used by TUI and `view`
 # ---------------------------------------------------------------------------
@@ -492,7 +518,7 @@ def _tui(stdscr):
             li, ci = sel_card
             _expand(stdscr, board.lanes[li].cards[ci])
         elif c == ord("r"):
-            board = read_board(); msg = "reloaded"
+            maybe_reconcile(); board = read_board(); msg = "reloaded"
 
 
 def _expand(stdscr, block):
@@ -609,6 +635,7 @@ def main():
     args = p.parse_args()
     if args.cmd == "help":
         p.print_help(); return
+    maybe_reconcile()               # file any [x] card (incl. ticked in Obsidian) into Done
     if not args.cmd:
         maybe_gc()
         run_tui()

@@ -46,7 +46,10 @@ straight there.
   lane · **r** reload · **q** quit
 
 Completion is the lane: a card in **Done** is checked `[x]`, a card anywhere else
-is `[ ]`, and moving a card in/out of Done flips it automatically.
+is `[ ]`, and moving a card in/out of Done flips it automatically. Any `[x]` card
+that ends up outside Done — e.g. ticked directly in Obsidian — is auto-filed into
+**Done** on the next run (and on TUI reload), so checking a box anywhere always
+means "done."
 
 ### Scripting / agents
 
