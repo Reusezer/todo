@@ -43,7 +43,11 @@ straight there.
 - **1–9** send the selected card to that lane (numbers shown on each lane)
 - **Enter** open the selected card for editing · **Shift+Enter** (or **a**) new card → **Inbox**
 - **x** complete (sends the card to **Done**; press again in Done to reopen it)
+- **D** delete the selected card (with confirmation)
 - **/** search · **g** jump to a lane · **r** reload · **Esc**/**q** quit
+
+New cards are stamped with a **created date** (shown dimmed) — light context for
+using the board as a quick scratch / "don't-forget" memo, not just tasks.
 
 Cards open in a multi-line editor for detailed notes. On terminals with the
 kitty keyboard protocol (Ghostty, kitty, WezTerm, recent iTerm2): **Enter** =
@@ -68,6 +72,7 @@ todo search <query>
 todo add "buy milk" [--lane Inbox] [--tag "#me"]
 todo mv <id> <lane>       # id + lane index/name from `todo ls`
 todo done <id>            # complete: move the card to Done (auto-checked)
+todo rm   <id>            # delete a card
 todo view [query]         # plain-text board dump
 todo gc [--days N] [--dry-run]   # expire old Done cards now
 todo sync                 # rebuild the JSONL mirror

@@ -29,6 +29,7 @@ DONE_RE = re.compile(r"^- \[[xX]\] ")
 HEADER_RE = re.compile(r"^## ")
 HTML_RE = re.compile(r"<[^>]+>")
 TAG_RE = re.compile(r"#[A-Za-z0-9_\-/]+")
+DATE_RE = re.compile(r"@\{(\d{4}-\d{2}-\d{2})\}")   # created date (Obsidian-Kanban date syntax)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +139,13 @@ def serialize(board):
 def card_title(block):
     line = block[0]
     line = CARD_RE.sub("", line, count=1)
+    line = DATE_RE.sub("", line)             # the @{date} is shown separately, not in the title
     return strip_html(line).strip()
+
+
+def card_date(block):
+    m = DATE_RE.search(block[0])
+    return m.group(1) if m else None
 
 
 def card_done(block):
@@ -182,7 +189,7 @@ def to_records(board):
             recs.append({
                 "id": card_id(title), "lane": lane.name, "lane_index": li + 1,
                 "done": card_done(block), "tags": card_tags(block),
-                "title": title, "body": card_body(block),
+                "created": card_date(block), "title": title, "body": card_body(block),
             })
     return recs
 
@@ -277,13 +284,29 @@ def op_set_card(lane_name, title, new_text):
     return False
 
 
+def op_delete(lane_name, title):
+    board = read_board()
+    for lane in board.lanes:
+        if lane.name != lane_name:
+            continue
+        for i, block in enumerate(lane.cards):
+            if card_title(block) == title:
+                del lane.cards[i]
+                write_board(serialize(board))
+                return True
+    return False
+
+
 def op_add(dest_idx, text, tag=None):
     board = read_board()
     if not (0 <= dest_idx < len(board.lanes)):
         return False
     if tag and not text.startswith(tag):
         text = tag + " " + text
-    board.lanes[dest_idx].cards.append(_block_from_text("- [ ] ", text))
+    block = _block_from_text("- [ ] ", text)
+    if not DATE_RE.search(block[0]):                 # stamp the created date
+        block[0] = block[0].rstrip() + f" @{{{dt.date.today().isoformat()}}}"
+    board.lanes[dest_idx].cards.append(block)
     write_board(serialize(board))
     return True
 
@@ -423,14 +446,16 @@ def build_view(board, sel, query=""):
             mark = "›" if idx == sel else " "
             done = "✓" if card_done(b) else " "
             tags = card_tags(b)
-            rows.append((f"  {mark} [{done}] {card_title(b)}",
+            date = card_date(b) or ""
+            suffix = f"   {date}" if date else ""
+            rows.append((f"  {mark} [{done}] {card_title(b)}{suffix}",
                          "card_sel" if idx == sel else "card",
-                         tags[0] if tags else ""))
+                         tags[0] if tags else "", date))
         if not vis:
             rows.append(("      —", "empty"))
     rows.append(("", "sep"))
-    rows.append(("  j/k select · 1-9 send to lane · enter edit · shift+enter/a new", "foot"))
-    rows.append(("  x done · / search · g go-to · r reload · q quit", "foot"))
+    rows.append(("  j/k select · 1-9 lane · enter edit · shift+enter/a new", "foot"))
+    rows.append(("  x done · D delete · / search · g go-to · r reload · q quit", "foot"))
     return rows, flat
 
 
@@ -615,10 +640,18 @@ def _tui(stdscr):
             elif rkind in ("foot", "empty", "sep"): attr = curses.A_DIM
             try: stdscr.addnstr(y, 0, text[:w - 1], w - 1, attr)
             except curses.error: pass
-            # tint just the [ ] box with the tag's gentle color (agent cards)
-            if rkind == "card" and tag and len(text) >= 7:
-                try: stdscr.addnstr(y, 4, text[4:7], 3, tag_attr_for(tag))
-                except curses.error: pass
+            if rkind == "card":
+                # tint just the [ ] box with the tag's gentle color (agent cards)
+                if tag and len(text) >= 7:
+                    try: stdscr.addnstr(y, 4, text[4:7], 3, tag_attr_for(tag))
+                    except curses.error: pass
+                # show the created date dimmed (it's metadata, not urgent)
+                date = row[3] if len(row) > 3 else ""
+                if date:
+                    col = len(text) - len(date)
+                    if 0 <= col < w - 1:
+                        try: stdscr.addnstr(y, col, date, len(date), curses.A_DIM)
+                        except curses.error: pass
         if msg:
             try: stdscr.addnstr(h - 1, 0, ("  " + msg)[:w - 1], w - 1, curses.A_DIM)
             except curses.error: pass
@@ -668,6 +701,10 @@ def _tui(stdscr):
             nt = medit("Edit card", card_raw_text(board.lanes[li].cards[ci]))
             if nt is not None and nt.strip():
                 op_set_card(ln, ti, nt.strip("\n")); board = read_board(); msg = "edited"
+        elif ch == "D" and sel_card:                  # delete (with confirm)
+            ln, ti = cur_title_lane()
+            if (prompt(f'delete "{ti[:32]}"? (y/N): ') or "").strip().lower() == "y":
+                op_delete(ln, ti); board = read_board(); msg = "deleted"
         elif ch == "/":
             q = prompt("/", query); query = q or ""; sel = 0
         elif ch == "g":
@@ -738,6 +775,15 @@ def cmd_done(a):
     print(f"done -> {board.lanes[done_idx].name}: {ti}")
 
 
+def cmd_rm(a):
+    board = read_board()
+    loc = find_card(board, a.id)
+    if loc is None: sys.exit(f"no card with id {a.id}")
+    ti = card_title(board.lanes[loc[0]].cards[loc[1]])
+    op_delete(board.lanes[loc[0]].name, ti)
+    print(f"deleted: {ti}")
+
+
 def cmd_view(a):
     rows, _ = build_view(read_board(), -1, a.query or "")
     for row in rows: print(row[0])
@@ -772,6 +818,7 @@ def main():
     s.set_defaults(fn=cmd_add)
     s = sub.add_parser("mv"); s.add_argument("id"); s.add_argument("lane"); s.set_defaults(fn=cmd_mv)
     s = sub.add_parser("done"); s.add_argument("id"); s.set_defaults(fn=cmd_done)
+    s = sub.add_parser("rm"); s.add_argument("id"); s.set_defaults(fn=cmd_rm)
     s = sub.add_parser("view"); s.add_argument("query", nargs="?"); s.set_defaults(fn=cmd_view)
     s = sub.add_parser("sync"); s.set_defaults(fn=cmd_sync)
     s = sub.add_parser("gc"); s.add_argument("--days", type=int); s.add_argument("--dry-run", action="store_true")
