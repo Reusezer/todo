@@ -247,15 +247,31 @@ def op_move(lane_name, title, dest_idx):
     return True
 
 
-def op_edit(lane_name, title, new_text):
+def _block_from_text(prefix, text):
+    """Build a card block from possibly-multi-line text: first line is the card,
+    the rest are tab-indented continuation lines (Obsidian Kanban card body)."""
+    lines = text.split("\n")
+    return [prefix + lines[0]] + ["\t" + l for l in lines[1:]]
+
+
+def card_raw_text(block):
+    """Inverse of _block_from_text: the editable text of a card (checkbox stripped,
+    continuation lines de-indented), preserving the raw markdown for editing."""
+    first = CARD_RE.sub("", block[0], count=1)
+    rest = [l[1:] if l.startswith("\t") else l for l in block[1:]]
+    return "\n".join([first] + rest)
+
+
+def op_set_card(lane_name, title, new_text):
+    """Replace a card's full content (title + body), keeping its [ ]/[x] state."""
     board = read_board()
     for lane in board.lanes:
         if lane.name != lane_name:
             continue
-        for block in lane.cards:
+        for i, block in enumerate(lane.cards):
             if card_title(block) == title:
                 prefix = block[0][:6] if CARD_RE.match(block[0]) else "- [ ] "
-                block[0] = prefix + new_text
+                lane.cards[i] = _block_from_text(prefix, new_text)
                 write_board(serialize(board))
                 return True
     return False
@@ -265,8 +281,9 @@ def op_add(dest_idx, text, tag=None):
     board = read_board()
     if not (0 <= dest_idx < len(board.lanes)):
         return False
-    body = (tag + " " if tag and not text.startswith(tag) else "") + text
-    board.lanes[dest_idx].cards.append(["- [ ] " + body])
+    if tag and not text.startswith(tag):
+        text = tag + " " + text
+    board.lanes[dest_idx].cards.append(_block_from_text("- [ ] ", text))
     write_board(serialize(board))
     return True
 
@@ -450,6 +467,59 @@ def _tui(stdscr):
                 try: buf.append(chr(c))
                 except ValueError: pass
 
+    def medit(label, prefill=""):
+        """Full-screen multi-line editor. Enter=new line, Ctrl-D=save, Esc=cancel."""
+        curses.curs_set(1)
+        lines = prefill.split("\n") if prefill else [""]
+        cy, cx = len(lines) - 1, len(lines[-1])
+        try:
+            while True:
+                h, w = stdscr.getmaxyx()
+                maxvis = max(3, h - 4)
+                top = max(0, cy - (maxvis - 1))
+                stdscr.erase()
+                stdscr.addnstr(0, 0, label[:w - 1], w - 1, curses.A_BOLD)
+                stdscr.addnstr(1, 0, ("─" * (w - 1))[:w - 1], w - 1, curses.A_DIM)
+                for i, ln in enumerate(lines[top:top + maxvis]):
+                    try: stdscr.addnstr(2 + i, 0, ln[:w - 1], w - 1)
+                    except curses.error: pass
+                stdscr.addnstr(h - 1, 0,
+                               "Enter: new line   Ctrl-D: save   Esc: cancel"[:w - 1],
+                               w - 1, curses.A_DIM)
+                try: stdscr.move(2 + (cy - top), min(cx, w - 1))
+                except curses.error: pass
+                stdscr.refresh()
+                ch = stdscr.get_wch()
+                if isinstance(ch, str):
+                    if ch == "\x04":                 # Ctrl-D = save
+                        curses.curs_set(0); return "\n".join(lines)
+                    if ch == "\x1b":                 # Esc = cancel
+                        curses.curs_set(0); return None
+                    if ch in ("\n", "\r"):
+                        rest = lines[cy][cx:]; lines[cy] = lines[cy][:cx]
+                        lines.insert(cy + 1, rest); cy += 1; cx = 0
+                    elif ch in ("\x7f", "\b"):
+                        if cx > 0: lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]; cx -= 1
+                        elif cy > 0:
+                            cx = len(lines[cy - 1]); lines[cy - 1] += lines[cy]
+                            del lines[cy]; cy -= 1
+                    else:
+                        lines[cy] = lines[cy][:cx] + ch + lines[cy][cx:]; cx += len(ch)
+                else:
+                    if ch == curses.KEY_BACKSPACE:
+                        if cx > 0: lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]; cx -= 1
+                        elif cy > 0:
+                            cx = len(lines[cy - 1]); lines[cy - 1] += lines[cy]
+                            del lines[cy]; cy -= 1
+                    elif ch == curses.KEY_LEFT: cx = max(0, cx - 1)
+                    elif ch == curses.KEY_RIGHT: cx = min(len(lines[cy]), cx + 1)
+                    elif ch == curses.KEY_UP and cy > 0: cy -= 1; cx = min(cx, len(lines[cy]))
+                    elif ch == curses.KEY_DOWN and cy < len(lines) - 1: cy += 1; cx = min(cx, len(lines[cy]))
+                    elif ch == curses.KEY_DC and cx < len(lines[cy]):
+                        lines[cy] = lines[cy][:cx] + lines[cy][cx + 1:]
+        except Exception:
+            curses.curs_set(0); return None
+
     while True:
         rows, flat = build_view(board, sel, query)
         if flat: sel = max(0, min(sel, len(flat) - 1))
@@ -499,13 +569,17 @@ def _tui(stdscr):
             else:
                 op_move(ln, ti, done_idx); board = read_board(); msg = "done → " + board.lanes[done_idx].name
         elif c == ord("a"):
-            li = sel_card[0] if sel_card else 0
-            t = prompt(f"add to {board.lanes[li].name}: ")
-            if t: op_add(li, t.strip()); board = read_board(); msg = "added"
+            inbox = next((i for i, l in enumerate(board.lanes)
+                          if l.name.lower() == "inbox"), 0)
+            t = medit(f"New card → {board.lanes[inbox].name}")
+            if t and t.strip():
+                op_add(inbox, t.strip("\n")); board = read_board(); msg = "added → " + board.lanes[inbox].name
         elif c == ord("e") and sel_card:
+            li, ci = sel_card
             ln, ti = cur_title_lane()
-            nt = prompt("edit: ", ti)
-            if nt is not None and nt.strip(): op_edit(ln, ti, nt.strip()); board = read_board()
+            nt = medit("Edit card", card_raw_text(board.lanes[li].cards[ci]))
+            if nt is not None and nt.strip():
+                op_set_card(ln, ti, nt.strip("\n")); board = read_board(); msg = "edited"
         elif c == ord("/"):
             q = prompt("/", query); query = q or ""; sel = 0
         elif c == ord("g"):

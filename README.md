@@ -40,10 +40,14 @@ Each lane shows its number, so pressing that number sends the selected card
 straight there.
 
 - **j / k** (or arrows) select a card
-- **1–9** send the selected card to that lane (numbers shown in the bar)
-- **a** add · **x** complete (sends the card to **Done**; press again in Done to
-  reopen it) · **e** edit · **enter** expand · **/** search · **g** jump to a
-  lane · **r** reload · **q** quit
+- **1–9** send the selected card to that lane (numbers shown on each lane)
+- **a** add a new card (always goes to **Inbox**) · **e** edit the selected card
+- **x** complete (sends the card to **Done**; press again in Done to reopen it)
+- **enter** expand · **/** search · **g** jump to a lane · **r** reload · **q** quit
+
+**a** and **e** open a multi-line editor for detailed cards — **Enter** inserts a
+new line, **Ctrl-D** saves, **Esc** cancels. The first line is the card title;
+the rest becomes its body.
 
 Completion is the lane: a card in **Done** is checked `[x]`, a card anywhere else
 is `[ ]`, and moving a card in/out of Done flips it automatically. Any `[x]` card
