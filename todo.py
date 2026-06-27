@@ -422,14 +422,15 @@ def build_view(board, sel, query=""):
             flat.append((li, ci))
             mark = "›" if idx == sel else " "
             done = "✓" if card_done(b) else " "
+            tags = card_tags(b)
             rows.append((f"  {mark} [{done}] {card_title(b)}",
-                         "card_sel" if idx == sel else "card"))
+                         "card_sel" if idx == sel else "card",
+                         tags[0] if tags else ""))
         if not vis:
             rows.append(("      —", "empty"))
     rows.append(("", "sep"))
-    rows.append(("  j/k move · 1-{n} send to lane · a add · x done · e edit"
-                 .format(n=len(board.lanes)), "foot"))
-    rows.append(("  / search · enter expand · g go-to · r reload · q quit", "foot"))
+    rows.append(("  j/k select · 1-9 send to lane · enter edit · shift+enter/a new", "foot"))
+    rows.append(("  x done · / search · g go-to · r reload · q quit", "foot"))
     return rows, flat
 
 
@@ -437,17 +438,101 @@ def build_view(board, sel, query=""):
 # TUI (curses)
 # ---------------------------------------------------------------------------
 def run_tui():
-    import curses
-    curses.wrapper(_tui)
+    import curses, os, sys
+    try:
+        curses.wrapper(_tui)
+    finally:
+        try: os.write(sys.__stdout__.fileno(), b"\x1b[<u")   # pop kitty kbd protocol
+        except Exception: pass
 
 
 def _tui(stdscr):
-    import curses
+    import curses, os, sys
     curses.curs_set(0)
     stdscr.keypad(True)
+    try: curses.set_escdelay(25)
+    except Exception: pass
     sel, query, msg = 0, "", ""
     board = read_board()
     done_name = load_config()["done_lane"].lower()
+
+    # gentle, per-tag color for agent cards: same #tag -> same soft color,
+    # picked deterministically from a muted palette by hashing the tag name.
+    _SOFT = [109, 108, 110, 144, 139, 151, 146, 180, 175, 116, 73, 167]
+    _BASIC = [curses.COLOR_CYAN, curses.COLOR_GREEN, curses.COLOR_MAGENTA,
+              curses.COLOR_YELLOW, curses.COLOR_BLUE]
+    pal, _dim = [], 0
+    try:
+        curses.start_color(); curses.use_default_colors()
+        pal = _SOFT if curses.COLORS >= 256 else _BASIC
+        for i, col in enumerate(pal, start=1):
+            curses.init_pair(i, col, -1)
+        _dim = 0 if curses.COLORS >= 256 else curses.A_DIM
+    except Exception:
+        pal = []
+
+    def tag_attr_for(tag):
+        if not pal:
+            return curses.A_DIM
+        idx = 1 + (int(hashlib.sha1(tag.encode("utf-8")).hexdigest(), 16) % len(pal))
+        return curses.color_pair(idx) | _dim
+
+    try: out_fd = sys.__stdout__.fileno()
+    except Exception: out_fd = 1
+
+    def _seq_tail():
+        s = ""
+        stdscr.nodelay(True)
+        try:
+            for _ in range(24):
+                try: c = stdscr.get_wch()
+                except curses.error: break
+                if isinstance(c, int): break
+                s += c
+                if c.isalpha() or c == "~": break
+        finally:
+            stdscr.nodelay(False)
+        return s
+
+    # kitty keyboard protocol lets us tell Enter from Shift+Enter (Ghostty/kitty/
+    # WezTerm/recent iTerm2). Auto-detect; override with TODO_KBD=kitty|legacy.
+    forced = os.environ.get("TODO_KBD", "").lower()
+    kitty = forced == "kitty"
+    if not forced:
+        try:
+            os.write(out_fd, b"\x1b[>1u\x1b[?u")          # enable + query support
+            stdscr.timeout(150)
+            if stdscr.get_wch() == "\x1b":
+                kitty = ("\x1b" + _seq_tail()).startswith("\x1b[?")
+        except curses.error:
+            pass
+        stdscr.timeout(-1)
+    elif kitty:
+        try: os.write(out_fd, b"\x1b[>1u")
+        except Exception: pass
+
+    def read_key():
+        try: ch = stdscr.get_wch()
+        except curses.error: return ("ignore",)
+        if isinstance(ch, int):
+            return ("key", ch)
+        if ch == "\x1b":
+            tail = _seq_tail()
+            m = re.match(r"\[(\d+)(?:;(\d+))?u", tail)
+            if m:
+                code, mod = int(m.group(1)), int(m.group(2) or 1)
+                if code == 13: return ("senter",) if mod >= 2 else ("enter",)
+                if code == 27: return ("esc",)
+                return ("ignore",)
+            return {"[A": ("key", curses.KEY_UP), "OA": ("key", curses.KEY_UP),
+                    "[B": ("key", curses.KEY_DOWN), "OB": ("key", curses.KEY_DOWN),
+                    "[C": ("key", curses.KEY_RIGHT), "OC": ("key", curses.KEY_RIGHT),
+                    "[D": ("key", curses.KEY_LEFT), "OD": ("key", curses.KEY_LEFT),
+                    }.get(tail, ("esc",))
+        if ch in ("\n", "\r"): return ("enter",)
+        if ch == "\x04": return ("ctrl_d",)
+        if ch in ("\x7f", "\b"): return ("key", curses.KEY_BACKSPACE)
+        return ("char", ch)
 
     def prompt(label, prefill=""):
         curses.curs_set(1)
@@ -456,16 +541,16 @@ def _tui(stdscr):
         while True:
             stdscr.move(h - 1, 0); stdscr.clrtoeol()
             stdscr.addnstr(h - 1, 0, (label + "".join(buf))[:w - 1], w - 1)
-            c = stdscr.getch()
-            if c in (10, 13):
+            stdscr.refresh()
+            t = read_key()
+            if t[0] == "enter":
                 curses.curs_set(0); return "".join(buf)
-            if c == 27:
+            if t[0] == "esc":
                 curses.curs_set(0); return None
-            if c in (curses.KEY_BACKSPACE, 127, 8):
+            if t[0] == "key" and t[1] == curses.KEY_BACKSPACE:
                 if buf: buf.pop()
-            elif 32 <= c < 0x110000:
-                try: buf.append(chr(c))
-                except ValueError: pass
+            elif t[0] == "char":
+                buf.append(t[1])
 
     def medit(label, prefill=""):
         """Full-screen multi-line editor. Enter=new line, Ctrl-D=save, Esc=cancel."""
@@ -483,39 +568,34 @@ def _tui(stdscr):
                 for i, ln in enumerate(lines[top:top + maxvis]):
                     try: stdscr.addnstr(2 + i, 0, ln[:w - 1], w - 1)
                     except curses.error: pass
-                stdscr.addnstr(h - 1, 0,
-                               "Enter: new line   Ctrl-D: save   Esc: cancel"[:w - 1],
-                               w - 1, curses.A_DIM)
+                foot = ("Enter: save   Shift+Enter: new line   Esc: cancel" if kitty
+                        else "Enter: new line   Ctrl-D: save   Esc: cancel")
+                stdscr.addnstr(h - 1, 0, foot[:w - 1], w - 1, curses.A_DIM)
                 try: stdscr.move(2 + (cy - top), min(cx, w - 1))
                 except curses.error: pass
                 stdscr.refresh()
-                ch = stdscr.get_wch()
-                if isinstance(ch, str):
-                    if ch == "\x04":                 # Ctrl-D = save
-                        curses.curs_set(0); return "\n".join(lines)
-                    if ch == "\x1b":                 # Esc = cancel
-                        curses.curs_set(0); return None
-                    if ch in ("\n", "\r"):
-                        rest = lines[cy][cx:]; lines[cy] = lines[cy][:cx]
-                        lines.insert(cy + 1, rest); cy += 1; cx = 0
-                    elif ch in ("\x7f", "\b"):
+                t = read_key()
+                kind, val = t[0], (t[1] if len(t) > 1 else None)
+                if kind == "ctrl_d" or (kitty and kind == "enter"):
+                    curses.curs_set(0); return "\n".join(lines)
+                if kind == "esc":
+                    curses.curs_set(0); return None
+                if kind == "senter" or (not kitty and kind == "enter"):
+                    rest = lines[cy][cx:]; lines[cy] = lines[cy][:cx]
+                    lines.insert(cy + 1, rest); cy += 1; cx = 0
+                elif kind == "char":
+                    lines[cy] = lines[cy][:cx] + val + lines[cy][cx:]; cx += len(val)
+                elif kind == "key":
+                    if val == curses.KEY_BACKSPACE:
                         if cx > 0: lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]; cx -= 1
                         elif cy > 0:
                             cx = len(lines[cy - 1]); lines[cy - 1] += lines[cy]
                             del lines[cy]; cy -= 1
-                    else:
-                        lines[cy] = lines[cy][:cx] + ch + lines[cy][cx:]; cx += len(ch)
-                else:
-                    if ch == curses.KEY_BACKSPACE:
-                        if cx > 0: lines[cy] = lines[cy][:cx - 1] + lines[cy][cx:]; cx -= 1
-                        elif cy > 0:
-                            cx = len(lines[cy - 1]); lines[cy - 1] += lines[cy]
-                            del lines[cy]; cy -= 1
-                    elif ch == curses.KEY_LEFT: cx = max(0, cx - 1)
-                    elif ch == curses.KEY_RIGHT: cx = min(len(lines[cy]), cx + 1)
-                    elif ch == curses.KEY_UP and cy > 0: cy -= 1; cx = min(cx, len(lines[cy]))
-                    elif ch == curses.KEY_DOWN and cy < len(lines) - 1: cy += 1; cx = min(cx, len(lines[cy]))
-                    elif ch == curses.KEY_DC and cx < len(lines[cy]):
+                    elif val == curses.KEY_LEFT: cx = max(0, cx - 1)
+                    elif val == curses.KEY_RIGHT: cx = min(len(lines[cy]), cx + 1)
+                    elif val == curses.KEY_UP and cy > 0: cy -= 1; cx = min(cx, len(lines[cy]))
+                    elif val == curses.KEY_DOWN and cy < len(lines) - 1: cy += 1; cx = min(cx, len(lines[cy]))
+                    elif val == curses.KEY_DC and cx < len(lines[cy]):
                         lines[cy] = lines[cy][:cx] + lines[cy][cx + 1:]
         except Exception:
             curses.curs_set(0); return None
@@ -525,21 +605,28 @@ def _tui(stdscr):
         if flat: sel = max(0, min(sel, len(flat) - 1))
         h, w = stdscr.getmaxyx()
         stdscr.erase()
-        for y, (text, kind) in enumerate(rows):
+        for y, row in enumerate(rows):
             if y >= h - 1: break
+            text, rkind = row[0], row[1]
+            tag = row[2] if len(row) > 2 else ""
             attr = curses.A_NORMAL
-            if kind in ("title", "lane"): attr = curses.A_BOLD
-            elif kind == "bar": attr = curses.A_DIM | curses.A_BOLD
-            elif kind == "card_sel": attr = curses.A_REVERSE
-            elif kind in ("foot", "empty", "sep"): attr = curses.A_DIM
+            if rkind in ("title", "lane"): attr = curses.A_BOLD
+            elif rkind == "card_sel": attr = curses.A_REVERSE
+            elif rkind in ("foot", "empty", "sep"): attr = curses.A_DIM
             try: stdscr.addnstr(y, 0, text[:w - 1], w - 1, attr)
             except curses.error: pass
+            # tint just the [ ] box with the tag's gentle color (agent cards)
+            if rkind == "card" and tag and len(text) >= 7:
+                try: stdscr.addnstr(y, 4, text[4:7], 3, tag_attr_for(tag))
+                except curses.error: pass
         if msg:
             try: stdscr.addnstr(h - 1, 0, ("  " + msg)[:w - 1], w - 1, curses.A_DIM)
             except curses.error: pass
         stdscr.refresh()
 
-        c = stdscr.getch()
+        t = read_key()
+        kind, val = t[0], (t[1] if len(t) > 1 else None)
+        ch = val if kind == "char" else ""
         msg = ""
         sel_card = flat[sel] if flat and sel < len(flat) else None
 
@@ -547,64 +634,50 @@ def _tui(stdscr):
             li, ci = sel_card
             return board.lanes[li].name, card_title(board.lanes[li].cards[ci])
 
-        if c in (ord("q"), 27 if not query else -999):
+        if kind == "esc":
+            if query: query = ""; sel = 0
+            else: break
+        elif ch == "q":
             break
-        elif c in (ord("j"), curses.KEY_DOWN):
+        elif ch == "j" or (kind == "key" and val == curses.KEY_DOWN):
             sel += 1
-        elif c in (ord("k"), curses.KEY_UP):
+        elif ch == "k" or (kind == "key" and val == curses.KEY_UP):
             sel = max(0, sel - 1)
-        elif ord("1") <= c <= ord("9"):
-            dest = c - ord("1")
+        elif ch.isdigit() and ch != "0":
+            dest = int(ch) - 1
             if sel_card and dest < len(board.lanes):
                 ln, ti = cur_title_lane()
                 op_move(ln, ti, dest); board = read_board()
                 msg = f"moved to {board.lanes[dest].name}"
-        elif c == ord("x") and sel_card:
-            li = sel_card[0]
-            ln, ti = cur_title_lane()
+        elif ch == "x" and sel_card:
+            li = sel_card[0]; ln, ti = cur_title_lane()
             done_idx = next((i for i, l in enumerate(board.lanes)
                              if l.name.lower() == done_name), len(board.lanes) - 1)
             if li == done_idx:                       # already done -> reopen into the first lane
                 op_move(ln, ti, 0); board = read_board(); msg = "reopened → " + board.lanes[0].name
             else:
                 op_move(ln, ti, done_idx); board = read_board(); msg = "done → " + board.lanes[done_idx].name
-        elif c == ord("a"):
+        elif ch == "a" or kind == "senter":         # Shift+Enter or 'a' = new card
             inbox = next((i for i, l in enumerate(board.lanes)
                           if l.name.lower() == "inbox"), 0)
-            t = medit(f"New card → {board.lanes[inbox].name}")
-            if t and t.strip():
-                op_add(inbox, t.strip("\n")); board = read_board(); msg = "added → " + board.lanes[inbox].name
-        elif c == ord("e") and sel_card:
-            li, ci = sel_card
-            ln, ti = cur_title_lane()
+            nt = medit(f"New card → {board.lanes[inbox].name}")
+            if nt and nt.strip():
+                op_add(inbox, nt.strip("\n")); board = read_board(); msg = "added → " + board.lanes[inbox].name
+        elif (kind == "enter" or ch == "e") and sel_card:   # Enter = open/edit card
+            li, ci = sel_card; ln, ti = cur_title_lane()
             nt = medit("Edit card", card_raw_text(board.lanes[li].cards[ci]))
             if nt is not None and nt.strip():
                 op_set_card(ln, ti, nt.strip("\n")); board = read_board(); msg = "edited"
-        elif c == ord("/"):
+        elif ch == "/":
             q = prompt("/", query); query = q or ""; sel = 0
-        elif c == ord("g"):
+        elif ch == "g":
             g = prompt("go to lane #: ")
             if g and g.isdigit():
                 target = int(g) - 1
                 pos = next((i for i, (li, _) in enumerate(flat) if li == target), None)
                 if pos is not None: sel = pos
-        elif c in (10, 13) and sel_card:
-            li, ci = sel_card
-            _expand(stdscr, board.lanes[li].cards[ci])
-        elif c == ord("r"):
+        elif ch == "r":
             maybe_reconcile(); board = read_board(); msg = "reloaded"
-
-
-def _expand(stdscr, block):
-    import curses
-    stdscr.erase()
-    h, w = stdscr.getmaxyx()
-    lines = ["  " + card_title(block), ""] + ["  " + l for l in block[1:]] + ["", "  (any key)"]
-    for y, l in enumerate(lines):
-        if y >= h - 1: break
-        try: stdscr.addnstr(y, 0, l[:w - 1], w - 1)
-        except curses.error: pass
-    stdscr.refresh(); stdscr.getch()
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +740,7 @@ def cmd_done(a):
 
 def cmd_view(a):
     rows, _ = build_view(read_board(), -1, a.query or "")
-    for text, _ in rows: print(text)
+    for row in rows: print(row[0])
 
 
 def cmd_sync(a):

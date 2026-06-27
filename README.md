@@ -41,13 +41,18 @@ straight there.
 
 - **j / k** (or arrows) select a card
 - **1–9** send the selected card to that lane (numbers shown on each lane)
-- **a** add a new card (always goes to **Inbox**) · **e** edit the selected card
+- **Enter** open the selected card for editing · **Shift+Enter** (or **a**) new card → **Inbox**
 - **x** complete (sends the card to **Done**; press again in Done to reopen it)
-- **enter** expand · **/** search · **g** jump to a lane · **r** reload · **q** quit
+- **/** search · **g** jump to a lane · **r** reload · **Esc**/**q** quit
 
-**a** and **e** open a multi-line editor for detailed cards — **Enter** inserts a
-new line, **Ctrl-D** saves, **Esc** cancels. The first line is the card title;
-the rest becomes its body.
+Cards open in a multi-line editor for detailed notes. On terminals with the
+kitty keyboard protocol (Ghostty, kitty, WezTerm, recent iTerm2): **Enter** =
+save, **Shift+Enter** = new line, **Esc** = cancel. On other terminals it falls
+back to **Enter** = new line, **Ctrl-D** = save (override with
+`TODO_KBD=kitty|legacy`). The first line is the card title; the rest is its body.
+
+Cards made by agents carry a `#tag`; their `[ ]` box is tinted a gentle color,
+one consistent color per tag, so you can see at a glance whose card is whose.
 
 Completion is the lane: a card in **Done** is checked `[x]`, a card anywhere else
 is `[ ]`, and moving a card in/out of Done flips it automatically. Any `[x]` card
